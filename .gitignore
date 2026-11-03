@@ -4,3 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 lib/Blynk/secrets.h
+tools/log_csv.exe
+data.csv

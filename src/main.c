@@ -16,6 +16,8 @@
 #include "ir_init.h"
 #include "sharp_ac_util.h"
 
+#include "logger_util.h"
+
 #include <stdio.h>
 
 // if the mic level goes above this we show the audio bars instead of the eyes, got this number by testing it manually irl
@@ -39,14 +41,15 @@ static void dht_speaker_task ( void* arg ) {
         // push the readings to the dashboard
         blynk_send_float( BLYNK_DS_TEMPERATURE, reading.temperature );
         blynk_send_float( BLYNK_DS_HUMIDITY, reading.humidity );
+        logger_set_dht( reading.temperature, reading.humidity );
 
         // beep if either one went up compared to the last reading
-        if (
-            reading.temperature > dht_last.temperature
-            || reading.humidity > dht_last.humidity
-        ) {
-            startup_chime();
-        }
+        // if (
+        //     reading.temperature > dht_last.temperature
+        //     || reading.humidity > dht_last.humidity
+        // ) {
+        //     startup_chime();
+        // }
         
         dht_last = reading;
 
@@ -84,10 +87,12 @@ void app_main() {
     start_sharp_ac_console();
 
     start_dht_speaker_loop();
-    
+    start_logger_loop();
+
     // main loop, reads the mic and decides what to show on the screen
     while (true) {
         struct AudioLevel level = read_audio();
+        logger_add_audio( level.level_left, level.level_right );
         // printf("L: %d  R: %d\n", level.level_left, level.level_right);
 
         blynk_send_int( BLYNK_DS_AUDIO_LEVEL, level.level_left );

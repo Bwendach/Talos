@@ -1,5 +1,6 @@
 #include "sharp_ac_config.h"
 #include "ir_util.h"
+#include "logger_util.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -248,6 +249,7 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
             SHARP_AC_BITS
         );
         ir_print_raw( symbols, count );
+        logger_set_ir( "unknown" );
         return;
     }
 
@@ -259,6 +261,7 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
 
     if ( expected != received ) {
         printf("Sharp AC RX: checksum mismatch (got %X, expected %X)\n", received, expected);
+        logger_set_ir( "sharp_bad_checksum" );
         return;
     }
 
@@ -282,6 +285,18 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
     }
 
     sharp_ac_print_state();
+
+    char command[LOG_IR_LEN];
+    snprintf(
+        command,
+        sizeof( command ),
+        "%s/%s/%dC/fan_%s",
+        sharp_ac.power ? "on" : "off",
+        sharp_ac_mode_name( sharp_ac.mode ),
+        sharp_ac.temp,
+        sharp_ac_fan_name( sharp_ac.fan )
+    );
+    logger_set_ir( command );
 }
 
 // turns "on" or "off" into a bool, returns false if it's neither
