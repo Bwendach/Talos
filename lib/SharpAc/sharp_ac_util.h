@@ -1,13 +1,43 @@
+#pragma once
+
 #include "sharp_ac_config.h"
 #include "ir_util.h"
 #include "logger_util.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_timer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define SHARP_AC_ECHO_GUARD_US 300'000
+#define SHARP_AC_ECHO_MATCH_US 2'000'000
+#define SHARP_AC_SOURCE_LEN 48
+
+typedef void ( *sharp_ac_manual_cb_t )( const char* source );
+typedef bool ( *sharp_ac_extra_cmd_cb_t )( const char* cmd, const char* arg );
+
+static SemaphoreHandle_t sharp_ac_mutex = NULL;
+static int64_t sharp_ac_last_tx_us = 0;
+static uint8_t sharp_ac_last_tx_frame[SHARP_AC_STATE_LEN];
+static bool sharp_ac_last_tx_valid = false;
+static sharp_ac_manual_cb_t sharp_ac_manual_cb = NULL;
+static sharp_ac_extra_cmd_cb_t sharp_ac_extra_cmd_cb = NULL;
+
+static void sharp_ac_lock_init () {
+    sharp_ac_mutex = xSemaphoreCreateMutex();
+}
+
+static void sharp_ac_lock () {
+    xSemaphoreTake( sharp_ac_mutex, portMAX_DELAY );
+}
+
+static void sharp_ac_unlock () {
+    xSemaphoreGive( sharp_ac_mutex );
+}
 
 // writes a value into some bits of a byte without messing up the other bits
 static void sharp_ac_set_bits ( uint8_t* frame, int byte, int offset, int size, uint8_t value ) {
@@ -86,6 +116,18 @@ static void sharp_ac_print_state () {
     );
 }
 
+static void sharp_ac_state_string ( char* out, size_t len ) {
+    snprintf(
+        out,
+        len,
+        "%s/%s/%dC/fan_%s",
+        sharp_ac.power ? "on" : "off",
+        sharp_ac_mode_name( sharp_ac.mode ),
+        sharp_ac.temp,
+        sharp_ac_fan_name( sharp_ac.fan )
+    );
+}
+
 // builds the frame from the current state, starting from the default one
 static void sharp_ac_build_frame (
     enum SharpAcPower power,
@@ -120,7 +162,12 @@ static esp_err_t sharp_ac_send (
     sharp_ac_build_frame( power, special, swing );
     sharp_ac_print_frame( "Sharp AC TX", sharp_ac_frame );
 
-    return ir_send_pulse_distance( &SHARP_AC_TIMING, sharp_ac_frame, SHARP_AC_BITS );
+    esp_err_t err = ir_send_pulse_distance( &SHARP_AC_TIMING, sharp_ac_frame, SHARP_AC_BITS );
+    sharp_ac_last_tx_us = esp_timer_get_time();
+    memcpy( sharp_ac_last_tx_frame, sharp_ac_frame, sizeof( sharp_ac_last_tx_frame ) );
+    sharp_ac_last_tx_valid = true;
+
+    return err;
 }
 
 // for changing settings, if the AC is off we just save it and don't send anything
@@ -230,7 +277,7 @@ static esp_err_t sharp_ac_set_econo ( bool on ) {
 }
 
 // gets called for every IR frame we receive, if it's from the Sharp remote we update our state to match
-static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count ) {
+static bool sharp_ac_handle_frame ( const rmt_symbol_word_t* symbols, size_t count ) {
     uint8_t frame[SHARP_AC_STATE_LEN];
 
     int bits = ir_decode_pulse_distance(
@@ -250,7 +297,7 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
         );
         ir_print_raw( symbols, count );
         logger_set_ir( "unknown" );
-        return;
+        return false;
     }
 
     sharp_ac_print_frame( "Sharp AC RX", frame );
@@ -262,7 +309,7 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
     if ( expected != received ) {
         printf("Sharp AC RX: checksum mismatch (got %X, expected %X)\n", received, expected);
         logger_set_ir( "sharp_bad_checksum" );
-        return;
+        return false;
     }
 
     // only change power for the normal on and off codes, the special ones are turbo or econo stuff
@@ -287,16 +334,42 @@ static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count )
     sharp_ac_print_state();
 
     char command[LOG_IR_LEN];
-    snprintf(
-        command,
-        sizeof( command ),
-        "%s/%s/%dC/fan_%s",
-        sharp_ac.power ? "on" : "off",
-        sharp_ac_mode_name( sharp_ac.mode ),
-        sharp_ac.temp,
-        sharp_ac_fan_name( sharp_ac.fan )
-    );
+    sharp_ac_state_string( command, sizeof( command ) );
     logger_set_ir( command );
+
+    return true;
+}
+
+static bool sharp_ac_is_echo ( const rmt_symbol_word_t* symbols, size_t count ) {
+    if ( !sharp_ac_last_tx_valid || esp_timer_get_time() - sharp_ac_last_tx_us >= SHARP_AC_ECHO_MATCH_US ) {
+        return false;
+    }
+
+    uint8_t frame[SHARP_AC_STATE_LEN];
+    int bits = ir_decode_pulse_distance( &SHARP_AC_TIMING, symbols, count, frame, SHARP_AC_BITS );
+
+    return bits == SHARP_AC_BITS && memcmp( frame, sharp_ac_last_tx_frame, sizeof( frame ) ) == 0;
+}
+
+static void sharp_ac_on_frame ( const rmt_symbol_word_t* symbols, size_t count ) {
+    if ( esp_timer_get_time() - sharp_ac_last_tx_us < SHARP_AC_ECHO_GUARD_US ) {
+        return;
+    }
+
+    sharp_ac_lock();
+
+    if ( sharp_ac_is_echo( symbols, count ) ) {
+        sharp_ac_unlock();
+        printf("Sharp AC RX: echo of our own command, ignored\n");
+        return;
+    }
+
+    bool valid = sharp_ac_handle_frame( symbols, count );
+    sharp_ac_unlock();
+
+    if ( valid && sharp_ac_manual_cb ) {
+        sharp_ac_manual_cb( "IR remote" );
+    }
 }
 
 // turns "on" or "off" into a bool, returns false if it's neither
@@ -327,11 +400,12 @@ static void sharp_ac_print_help () {
         "  econo on|off\n"
         "  ion on|off\n"
         "  status | replay | help\n"
+        "  auto on|off|status\n"
     );
 }
 
 // takes one typed line and does whatever it says
-static void sharp_ac_run_command ( char* line ) {
+static bool sharp_ac_run_command ( char* line ) {
     // split it into the command and its argument
     char* cmd = strtok( line, " " );
     char* arg = strtok( NULL, " " );
@@ -339,7 +413,7 @@ static void sharp_ac_run_command ( char* line ) {
     esp_err_t err = ESP_OK;
 
     if ( !cmd ) {
-        return;
+        return false;
     }
 
     // power
@@ -356,7 +430,7 @@ static void sharp_ac_run_command ( char* line ) {
         else if ( strcmp( arg, "cool" ) == 0 ) err = sharp_ac_set_mode( SHARP_AC_COOL );
         else if ( strcmp( arg, "heat" ) == 0 ) err = sharp_ac_set_mode( SHARP_AC_HEAT );
         else if ( strcmp( arg, "dry" ) == 0 ) err = sharp_ac_set_mode( SHARP_AC_DRY );
-        else { sharp_ac_print_help(); return; }
+        else { sharp_ac_print_help(); return false; }
     // fan
     } else if ( strcmp( cmd, "fan" ) == 0 && arg ) {
         if ( strcmp( arg, "auto" ) == 0 ) err = sharp_ac_set_fan( SHARP_AC_FAN_AUTO );
@@ -364,7 +438,7 @@ static void sharp_ac_run_command ( char* line ) {
         else if ( strcmp( arg, "med" ) == 0 ) err = sharp_ac_set_fan( SHARP_AC_FAN_MED );
         else if ( strcmp( arg, "high" ) == 0 ) err = sharp_ac_set_fan( SHARP_AC_FAN_HIGH );
         else if ( strcmp( arg, "max" ) == 0 ) err = sharp_ac_set_fan( SHARP_AC_FAN_MAX );
-        else { sharp_ac_print_help(); return; }
+        else { sharp_ac_print_help(); return false; }
     // all the on and off toggles
     } else if ( strcmp( cmd, "swing" ) == 0 && arg && sharp_ac_parse_on_off( arg, &on ) ) {
         err = sharp_ac_set_swing( on );
@@ -377,23 +451,32 @@ static void sharp_ac_run_command ( char* line ) {
     // stuff that doesn't send a Sharp frame
     } else if ( strcmp( cmd, "status" ) == 0 ) {
         sharp_ac_print_state();
-        return;
+        return false;
     } else if ( strcmp( cmd, "replay" ) == 0 ) {
         err = ir_replay_last();
+        sharp_ac_last_tx_us = esp_timer_get_time();
         printf("IR: replay %s\n", err == ESP_OK ? "sent" : "failed (nothing captured yet?)");
-        return;
+        return false;
+    } else if ( sharp_ac_extra_cmd_cb && sharp_ac_extra_cmd_cb( cmd, arg ) ) {
+        return false;
     // anything else just shows the help
     } else {
         sharp_ac_print_help();
-        return;
+        return false;
     }
 
     if ( err != ESP_OK ) {
         printf("Sharp AC: send failed (%s)\n", esp_err_to_name( err ));
-        return;
+        return false;
     }
 
     sharp_ac_print_state();
+
+    char command[LOG_IR_LEN];
+    sharp_ac_state_string( command, sizeof( command ) );
+    logger_set_ir( command );
+
+    return true;
 }
 
 // reads what you type in the serial monitor one char at a time and runs it when you hit enter
@@ -423,7 +506,17 @@ static void sharp_ac_console_task ( void* arg ) {
             line[len] = '\0';
             len = 0;
 
-            sharp_ac_run_command( line );
+            char source[SHARP_AC_SOURCE_LEN];
+            snprintf( source, sizeof( source ), "console '%.30s'", line );
+
+            sharp_ac_lock();
+            bool manual = sharp_ac_run_command( line );
+            sharp_ac_unlock();
+
+            if ( manual && sharp_ac_manual_cb ) {
+                sharp_ac_manual_cb( source );
+            }
+
             continue;
         }
 

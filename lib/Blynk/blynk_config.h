@@ -27,6 +27,7 @@
 #define BLYNK_DS_TEMPERATURE "Temperature"
 #define BLYNK_DS_HUMIDITY "Humidity"
 #define BLYNK_DS_AUDIO_LEVEL "Noise Level"
+#define BLYNK_DS_AUTOMATION "Automation"
 
 // tag for the ESP logs
 static const char* BLYNK_TAG = "Blynk";

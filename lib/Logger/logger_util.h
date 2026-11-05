@@ -11,8 +11,13 @@
 #define LOG_INTERVAL_MS 2'000
 #define LOG_IR_LEN 48
 #define LOG_FIELD_LEN 16
+#define LOGGER_MAX_ROW_CBS 2
+
+typedef void ( *logger_row_cb_t )( float temp, float hum, bool dht_valid, int mic_peak, const char* ir );
 
 static portMUX_TYPE log_mux = portMUX_INITIALIZER_UNLOCKED;
+static logger_row_cb_t logger_row_cbs[LOGGER_MAX_ROW_CBS];
+static int logger_row_cb_count = 0;
 
 static float log_temp = 0.0f;
 static float log_hum = 0.0f;
@@ -44,6 +49,12 @@ static void logger_set_ir ( const char* command ) {
     portENTER_CRITICAL( &log_mux );
     strlcpy( log_ir, command, sizeof( log_ir ) );
     portEXIT_CRITICAL( &log_mux );
+}
+
+static void logger_add_row_cb ( logger_row_cb_t cb ) {
+    if ( logger_row_cb_count < LOGGER_MAX_ROW_CBS ) {
+        logger_row_cbs[logger_row_cb_count++] = cb;
+    }
 }
 
 static void logger_task ( void* arg ) {
@@ -81,6 +92,10 @@ static void logger_task ( void* arg ) {
             mic_peak,
             ir
         );
+
+        for ( int i = 0; i < logger_row_cb_count; ++i ) {
+            logger_row_cbs[i]( temp, hum, dht_valid, mic_peak, ir );
+        }
     }
 }
 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include "blynk_config.h"
 
 #include <stdio.h>
