@@ -18,7 +18,12 @@
 
 #include "logger_util.h"
 
+#include "clock_util.h"
+#include "automation_util.h"
+#include "thingsboard_util.h"
+
 #include <stdio.h>
+#include <string.h>
 
 // if the mic level goes above this we show the audio bars instead of the eyes, got this number by testing it manually irl
 #define SOUND_THRESHOLD 60'000
@@ -60,6 +65,10 @@ static void dht_speaker_task ( void* arg ) {
 // gets called whenever Blynk sends something down to us, for now it just prints it
 static void on_blynk_downlink ( const char* datastream, const char* value ) {
     printf("Blynk: %s = %s\n", datastream, value);
+
+    if ( strcmp( datastream, BLYNK_DS_AUTOMATION ) == 0 ) {
+        automation_set_enabled( value[0] == '1' );
+    }
 }
 
 // runs the DHT and speaker stuff in its own task so it doesn't block the main loop
@@ -79,7 +88,12 @@ void app_main() {
     dht_cfg();
 
     // wifi and Blynk, also tells it what to do when Blynk sends us data
+    sharp_ac_lock_init();
+
     blynk_cfg( on_blynk_downlink );
+    clock_cfg();
+    automation_cfg();
+    thingsboard_cfg( automation_is_enabled, automation_set_enabled );
 
     // IR stuff, listens for remote frames and opens the serial console for the AC
     ir_cfg();
