@@ -401,6 +401,7 @@ static void sharp_ac_print_help () {
         "  ion on|off\n"
         "  status | replay | help\n"
         "  auto on|off|status\n"
+        "  auto say on|off|19|20|21\n"
     );
 }
 

@@ -84,6 +84,7 @@ void app_main() {
     mic_cfg();
 
     speaker_cfg();
+    voice_cfg();
 
     dht_cfg();
 

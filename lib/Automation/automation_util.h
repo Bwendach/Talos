@@ -6,6 +6,7 @@
 #include "clock_util.h"
 #include "blynk_util.h"
 #include "thingsboard_util.h"
+#include "voice_util.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -13,6 +14,7 @@
 #include "nvs.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define AUTO_NVS_NAMESPACE "talos"
@@ -105,6 +107,32 @@ static void automation_on_manual ( const char* source ) {
     printf("Auto: manual change (%s), paused for %d min\n", source, AUTO_OVERRIDE_S / 60);
 }
 
+static void automation_announce ( enum AutoAction action, int setpoint ) {
+    switch ( action ) {
+    case AUTO_OFF:
+        voice_say( VOICE_AC_OFF );
+        break;
+
+    case AUTO_ON_COOL16:
+        voice_say( VOICE_AC_ON_16 );
+        break;
+
+    case AUTO_SETPOINT:
+        if ( setpoint == 19 ) {
+            voice_say( VOICE_SET_19 );
+        } else if ( setpoint == 20 ) {
+            voice_say( VOICE_SET_20 );
+        } else if ( setpoint == 21 ) {
+            voice_say( VOICE_SET_21 );
+        }
+
+        break;
+
+    case AUTO_NONE:
+        break;
+    }
+}
+
 static void automation_apply ( enum AutoAction action, int new_setpoint ) {
     esp_err_t err = ESP_OK;
     char state[AUTO_STATE_LEN];
@@ -145,6 +173,7 @@ static void automation_apply ( enum AutoAction action, int new_setpoint ) {
     logger_set_ir( ir );
 
     printf("Auto: %s -> %s\n", auto_action_rule( action ), state);
+    automation_announce( action, new_setpoint );
 
     struct tm tm;
     char when[24] = "uptime";
@@ -246,7 +275,19 @@ static bool automation_console ( const char* cmd, const char* arg ) {
         return false;
     }
 
-    if ( arg && strcmp( arg, "on" ) == 0 ) {
+    if ( arg && strcmp( arg, "say" ) == 0 ) {
+        const char* what = strtok( NULL, " " );
+
+        if ( !what ) {
+            printf("Usage: auto say on|off|19|20|21\n");
+        } else if ( strcmp( what, "on" ) == 0 ) {
+            automation_announce( AUTO_ON_COOL16, AUTO_ON_SETPOINT );
+        } else if ( strcmp( what, "off" ) == 0 ) {
+            automation_announce( AUTO_OFF, 0 );
+        } else {
+            automation_announce( AUTO_SETPOINT, atoi( what ) );
+        }
+    } else if ( arg && strcmp( arg, "on" ) == 0 ) {
         automation_set_enabled( true );
     } else if ( arg && strcmp( arg, "off" ) == 0 ) {
         automation_set_enabled( false );
