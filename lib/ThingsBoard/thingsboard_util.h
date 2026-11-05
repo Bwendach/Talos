@@ -29,6 +29,11 @@ static char tb_ir[LOG_IR_LEN] = "";
 
 static volatile bool tb_ac_dirty = true;
 static struct SharpAcState tb_ac_sent;
+static int tb_actuator_rows = 0;
+static volatile bool tb_oled_bars = false;
+static volatile bool tb_speaker_playing = false;
+static volatile bool tb_speaker_played = false;
+static bool tb_speaker_sent = false;
 
 static void tb_publish ( const char* topic, const char* payload ) {
     if ( !tb_ok ) {
@@ -139,37 +144,60 @@ static void tb_on_ip ( void* arg, esp_event_base_t base, int32_t id, void* data 
     esp_mqtt_client_start( tb_client );
 }
 
-static void tb_send_ac_if_changed () {
+static void thingsboard_note_oled ( bool bars ) {
+    if ( bars ) {
+        tb_oled_bars = true;
+    }
+}
+
+static void thingsboard_note_speaker ( bool playing ) {
+    tb_speaker_playing = playing;
+
+    if ( playing ) {
+        tb_speaker_played = true;
+    }
+}
+
+static void tb_send_actuators () {
     sharp_ac_lock();
     struct SharpAcState ac = sharp_ac;
     sharp_ac_unlock();
 
+    bool speaker = tb_speaker_playing || tb_speaker_played;
+    tb_speaker_played = false;
+
     bool changed = ac.power != tb_ac_sent.power
         || ac.mode != tb_ac_sent.mode
         || ac.temp != tb_ac_sent.temp
-        || ac.fan != tb_ac_sent.fan;
+        || ac.fan != tb_ac_sent.fan
+        || speaker != tb_speaker_sent;
 
-    if ( !tb_ok || ( !changed && !tb_ac_dirty ) ) {
+    bool heartbeat = ++tb_actuator_rows >= TB_ACTUATOR_HEARTBEAT_ROWS;
+
+    if ( !tb_ok || ( !changed && !heartbeat && !tb_ac_dirty ) ) {
         return;
     }
 
     char payload[TB_PAYLOAD_LEN];
     snprintf(
         payload, sizeof( payload ),
-        "{\"ac_power\":%s,\"ac_mode\":\"%s\",\"ac_setpoint\":%d,\"ac_fan\":\"%s\"}",
+        "{\"ac_power\":%s,\"ac_mode\":\"%s\",\"ac_setpoint\":%d,\"ac_fan\":\"%s\",\"speaker\":\"%s\"}",
         ac.power ? "true" : "false",
         sharp_ac_mode_name( ac.mode ),
         ac.temp,
-        sharp_ac_fan_name( ac.fan )
+        sharp_ac_fan_name( ac.fan ),
+        speaker ? "playing" : "idle"
     );
 
     tb_publish( TB_TELEMETRY_TOPIC, payload );
     tb_ac_sent = ac;
+    tb_speaker_sent = speaker;
     tb_ac_dirty = false;
+    tb_actuator_rows = 0;
 }
 
 static void thingsboard_on_row ( float temp, float hum, bool dht_valid, int mic_peak, const char* ir ) {
-    tb_send_ac_if_changed();
+    tb_send_actuators();
 
     if ( dht_valid ) {
         tb_temp = temp;
@@ -200,10 +228,12 @@ static void thingsboard_on_row ( float temp, float hum, bool dht_valid, int mic_
         n += snprintf( payload + n, sizeof( payload ) - n, ",\"ir_cmd\":\"%s\"", tb_ir );
     }
 
+    n += snprintf( payload + n, sizeof( payload ) - n, ",\"oled_mode\":\"%s\"", tb_oled_bars ? "bars" : "eyes" );
     snprintf( payload + n, sizeof( payload ) - n, "}" );
 
     tb_publish( TB_TELEMETRY_TOPIC, payload );
 
+    tb_oled_bars = false;
     tb_rows = 0;
     tb_mic_max = 0;
     tb_ir[0] = '\0';

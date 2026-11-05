@@ -94,6 +94,7 @@ void app_main() {
     clock_cfg();
     automation_cfg();
     thingsboard_cfg( automation_is_enabled, automation_set_enabled );
+    speaker_set_state_cb( thingsboard_note_speaker );
 
     // IR stuff, listens for remote frames and opens the serial console for the AC
     ir_cfg();
@@ -112,8 +113,12 @@ void app_main() {
         blynk_send_int( BLYNK_DS_AUDIO_LEVEL, level.level_left );
 
         // if loud enough, show the bars, otherwise just do the blinking eyes
-        if ( level.level_left > SOUND_THRESHOLD
-                || level.level_right > SOUND_THRESHOLD ) {
+        bool loud = level.level_left > SOUND_THRESHOLD
+                || level.level_right > SOUND_THRESHOLD;
+
+        thingsboard_note_oled( loud );
+
+        if ( loud ) {
             audio_display(
                 to_bar(level.level_left),
                 to_bar(level.level_right)

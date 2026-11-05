@@ -8,6 +8,7 @@
 #define TB_BROKER_URI "mqtts://eu.thingsboard.cloud:8883"
 #define TB_KEEPALIVE_S 60
 #define TB_ROWS_PER_PUBLISH 8
+#define TB_ACTUATOR_HEARTBEAT_ROWS 150
 
 #define TB_TELEMETRY_TOPIC "v1/devices/me/telemetry"
 #define TB_ATTRIBUTES_TOPIC "v1/devices/me/attributes"

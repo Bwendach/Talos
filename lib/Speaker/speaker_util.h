@@ -2,7 +2,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
+
+typedef void ( *speaker_state_cb_t )( bool playing );
+
+static speaker_state_cb_t speaker_state_cb = NULL;
+
+static void speaker_set_state_cb ( speaker_state_cb_t cb ) {
+    speaker_state_cb = cb;
+}
 
 // buffer for the samples, times 2 because it's stereo
 static int16_t spk_buf[SPK_NUM_FRAMES * 2];
@@ -19,6 +28,11 @@ static void play_tone ( int freq_hz, int duration_ms, int volume ) {
     float phase = 0.0f;
 
     int total_frames = SPK_SAMPLE_RATE * duration_ms / 1'000;
+    bool audible = freq_hz > 0 && volume > 0;
+
+    if ( audible && speaker_state_cb ) {
+        speaker_state_cb( true );
+    }
 
     // fill the buffer in chunks and send them until we've played the whole thing
     while ( total_frames > 0 ) {
@@ -42,6 +56,10 @@ static void play_tone ( int freq_hz, int duration_ms, int volume ) {
         i2s_channel_write( tx, spk_buf, frames * 2 * sizeof( int16_t ), &bytes_written, portMAX_DELAY );
 
         total_frames -= frames;
+    }
+
+    if ( audible && speaker_state_cb ) {
+        speaker_state_cb( false );
     }
 }
 
