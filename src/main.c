@@ -21,6 +21,7 @@
 #include "clock_util.h"
 #include "automation_util.h"
 #include "thingsboard_util.h"
+#include "database_util.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -96,6 +97,7 @@ void app_main() {
     automation_cfg();
     thingsboard_cfg( automation_is_enabled, automation_set_enabled );
     speaker_set_state_cb( thingsboard_note_speaker );
+    database_cfg();
 
     // IR stuff, listens for remote frames and opens the serial console for the AC
     ir_cfg();

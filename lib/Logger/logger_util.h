@@ -11,7 +11,7 @@
 #define LOG_INTERVAL_MS 2'000
 #define LOG_IR_LEN 48
 #define LOG_FIELD_LEN 16
-#define LOGGER_MAX_ROW_CBS 2
+#define LOGGER_MAX_ROW_CBS 3
 
 typedef void ( *logger_row_cb_t )( float temp, float hum, bool dht_valid, int mic_peak, const char* ir );
 
